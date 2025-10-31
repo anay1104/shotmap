@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-from mplsoccer.pitch import VerticalPitch
+from mplsoccer import VerticalPitch
 import json
 import pandas as pd
 import understatapi
@@ -925,3 +925,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
