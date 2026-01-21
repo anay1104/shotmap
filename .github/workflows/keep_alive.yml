@@ -1,0 +1,22 @@
+name: Keep App Alive
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'
+  workflow_dispatch: 
+
+jobs:
+  ping-repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Critical: Grants the action permission to push to your repo
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Push Empty Commit
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git commit --allow-empty -m "Auto-commit to keep app awake"
+          git push
