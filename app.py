@@ -21,6 +21,20 @@ import streamlit as st
 
 st.set_page_config(page_title="Shotmapgen", page_icon=":soccer:")
 
+
+@st.cache_data
+def load_data():
+    with open("players/players_data.json", encoding="utf-8") as p:
+        loaded = json.load(p)
+    df = pd.DataFrame(loaded)
+    return df
+
+
+players_data = load_data()
+player_names = sorted(players_data["name"].unique().tolist())
+
+available_seasons = [str(year) for year in range(2024, 2012, -1)]
+
 torch.classes.__path__ = []
 
 if "visitor_count" not in st.session_state:
@@ -42,22 +56,22 @@ st.markdown(
 )
 
 st.header("About")
-st.write("Generates a shot map visualization of a player currently playing in the top 5 European leagues (PL, La Liga, Serie A, Bundesliga, Ligue 1) and RFPL. Data sourced from [Understat](https://understat.com). FPL EV projections also available, sourced from [fplreview](https://fplreview.com).")
+st.write(
+    "Generates a shot map visualization of a player currently playing in the top 5 European leagues (PL, La Liga, Serie A, Bundesliga, Ligue 1) and RFPL. Data sourced from [Understat](https://understat.com)."
+)
 
 tab1, tab2, tab3 = st.tabs(["Main", "Output", "FAQ"])
 
 with tab1:
     with st.container(height=320, border=True):
-        
+        input1 = st.selectbox(
+            "Select player",
+            options=player_names,
+            index=None,
+            placeholder="Type to search or select a player...",
+        )
 
-        input1 = st.text_input(
-            "Enter player name (try to give the full name if possible)",
-            placeholder="e.g. Mohamed Salah",
-        )
-        season = st.text_input(
-            "Enter year",
-            placeholder="e.g. enter 2022 if you wish to see results for the 2022/23 season",
-        )
+        season = st.selectbox("Select season", options=available_seasons, index=0)
 
         review_data = st.toggle(
             "Show FPL EV projection for the upcoming gameweek (Only for players currently playing in the Premier League)",
@@ -104,63 +118,10 @@ with tab1:
                             ) as f:
                                 return json.load(f)
 
-                        with open("players/players_data.json", encoding="utf-8") as p:
-                            loaded = json.load(p)
+                        closest = input1
+                        new_df = players_data[players_data["name"] == closest]
 
-                        players_data = pd.DataFrame(loaded)
-                        players_data["name"] = players_data["name"].str.lower()
-                        replace_dict = {
-                            "Serie A": "Serie_A",
-                            "La liga": "La_Liga",
-                            "Ligue 1": "Ligue_1",
-                        }
-                        players_data["league1"] = players_data["league"].replace(
-                            replace_dict
-                        )
-
-                        df4 = players_data["name"].dropna().astype(str).tolist()
-                        df4 = [name.lower() for name in df4]
-
-                        model = SentenceTransformer("models/all-MiniLM-L6-v2")
-
-                        def matching(input1, df4):
-                            input_embedding = model.encode(input1)
-                            df4_embeddings = model.encode(df4)
-
-                            similarities = util.cos_sim(input_embedding, df4_embeddings)
-
-                            best_match_index = similarities.argmax().item()
-                            best_match = df4[best_match_index]
-
-                            if similarities.max() < 0.8:
-                                for name in df4:
-                                    input_parts = input1.split()
-                                    name_parts = name.split()
-
-                                    if input_parts and name_parts:
-                                        input_first_part = input_parts[0]
-                                        name_first_part = name_parts[0]
-
-                                        if jellyfish.metaphone(
-                                            input_first_part
-                                        ) == jellyfish.metaphone(name_first_part):
-                                            return name
-
-                            return best_match
-
-                        input1 = input1.lower()
-                        closest = matching(input1, df4)
-
-                        if closest:
-                            new_df = players_data[players_data["name"] == closest]
-
-                        else:
-                            st.error(
-                                f"No player found matching '{input1}'. Please check spelling or try another player name.",
-                                icon="❌",
-                            )
-                            raise ValueError(f"No player match found for '{input1}'")
-
+                        # (The logic for player_id and league remains the same)
                         player_id = new_df.iloc[0, 0]
                         player_id = str(player_id)
                         league = new_df.iloc[0, 3]
@@ -186,6 +147,7 @@ with tab1:
                         player_name = df.iloc[1, 6]
 
                         if season == "2024" and league == "EPL" and review_data:
+                            model = SentenceTransformer("models/all-MiniLM-L6-v2")
                             chrome_options = Options()
                             chrome_options.add_argument("--headless")
                             chrome_options.add_argument("--disable-gpu")
@@ -799,7 +761,7 @@ with tab1:
                         ax3.text(
                             x=0.21,
                             y=0.05,
-                            s=f"Viz by @BetterThanMario | Github: github.com/AnayShukla | Data: understat.com | EV Data: fplreview.com",
+                            s=f"Viz by @BetterThanMario | Github: github.com/AnayShukla | Data: understat.com",
                             fontsize=10,
                             color="white",
                             alpha=0.7,
@@ -920,9 +882,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: gray; font-size: 0.8em;'>
-    By Anay Shukla | Data provided by Understat.com | FPL projections from fplreview.com
+    By Anay Shukla | Data provided by Understat.com 
     </div>
     """,
     unsafe_allow_html=True,
 )
-
