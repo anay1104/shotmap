@@ -1,22 +1,15 @@
-name: Keep App Alive
+name: Keep App Alive (Ping)
 
 on:
   schedule:
     - cron: '0 */8 * * *'
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
-  ping-repo:
+  ping-url:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write  # Critical: Grants the action permission to push to your repo
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Push Empty Commit
+      - name: Ping App URL
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git commit --allow-empty -m "Auto-commit to keep app awake"
-          git push
+          # Replace with your actual Streamlit App URL
+          curl -I https://your-app-name.streamlit.app/
