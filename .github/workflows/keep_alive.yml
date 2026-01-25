@@ -12,4 +12,4 @@ jobs:
       - name: Ping App URL
         run: |
           # Replace with your actual Streamlit App URL
-          curl -I https://your-app-name.streamlit.app/
+          curl -I https://shotmap.streamlit.app/
