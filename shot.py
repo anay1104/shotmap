@@ -1,32 +1,56 @@
 # %%
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-from mplsoccer.pitch import VerticalPitch
+import matplotlib.pyplot as plt  # type: ignore
+import matplotlib.font_manager as fm  # type: ignore
+from mplsoccer.pitch import VerticalPitch  # type: ignore
 import json
 import pandas as pd
-import understatapi
-import numpy as np
+import requests
 import os
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import Select
-from selenium.webdriver.chrome.options import Options
-import time
-from sentence_transformers import SentenceTransformer, util
-import jellyfish
-from webdriver_manager.chrome import ChromeDriverManager
+from sentence_transformers import SentenceTransformer, util  # type: ignore
+import jellyfish  # type: ignore
 
 # %%
 
-
-def load_player_mappings():
-    with open("data/player_mappings.json", "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
 with open("players/players_data.json", encoding="utf-8") as p:
     loaded = json.load(p)
+
+
+def get_player_understat_data(player_id):
+    base_url = "https://understat.com"
+    player_url = f"{base_url}/getPlayerData/{player_id}"
+    try:
+        with requests.Session() as session:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}
+            )
+            r = session.get(player_url)
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        return None
+    return None
+
+
+def check_if_team_in_league(league_name, season, team_name):
+    url = f"https://understat.com/getLeagueData/{league_name}/{season}"
+    try:
+        with requests.Session() as session:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}
+            )
+            r = session.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                main_data = data.get("dates", data.get("date", []))
+                for match in main_data:
+                    home_team = match.get("h", {}).get("title")
+                    away_team = match.get("a", {}).get("title")
+                    if home_team == team_name or away_team == team_name:
+                        return True
+    except Exception:
+        return False
+    return False
+
 
 players_data = pd.DataFrame(loaded)
 players_data["name"] = players_data["name"].str.lower()
@@ -86,117 +110,63 @@ league = new_df.iloc[0, 3]
 league_name = new_df.iloc[0, 2]
 
 # %%
-client = understatapi.UnderstatClient()
+player_json_data = get_player_understat_data(player_id)
 
-shots_player = client.player(player=player_id).get_shot_data()
+if not player_json_data:
+    print("Error: Could not retrieve data from Understat.")
+    exit()
 
-df = pd.DataFrame(shots_player)
+# Get Shots
+shots_data = player_json_data["shots"]
+df = pd.DataFrame(shots_data)
 df = df[df["season"] == season]
-player_name = df.iloc[1, 6]
+player_name = input1  # Or retrieve specific name from json if needed
 
-# %%
-if league == "EPL" and season == "2024":
-    review_data = input(
-        "Do you want to see EV projections for the upcoming GW? (Y/N): "
-    )
+# --- CALCULATE PER 90 STATS ---
+season_groups = player_json_data.get("groups", {}).get("season", [])
+current_stats = [item for item in season_groups if str(item["season"]) == str(season)]
 
-    if review_data.lower() == "y":
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--disable-logging")
-        chrome_options.add_argument("--silent")
-
-        driver = webdriver.Chrome(
-            ChromeDriverManager().install(), options=chrome_options
-        )
-
-        url1 = "https://www.fplreview.com/free-planner/"
-        driver.get(url1)
-
-        time.sleep(15)
-
-        dropdown = Select(driver.find_element(By.ID, "myGroup"))
-        dropdown.select_by_visible_text("All Players")
-
-        checkbox = driver.find_element(By.ID, "checker")
-        if not checkbox.is_selected():
-            checkbox.click()
-
-        rows = driver.find_elements(By.CLASS_NAME, "playerRow")
-
-        num_rows = len(rows)
-
-        playlist = []
-
-        for row_num in range(1, num_rows - 1):
-            xpath = f'//*[@id="lightweight"]/tr[{row_num}]'
-            name = driver.find_element(
-                By.XPATH, f'{xpath}/td[2]//div[@class="playerName"]'
-            ).text
-            price = driver.find_element(
-                By.XPATH, f'{xpath}/td[2]//div[@class="playerDetails"]'
-            ).text
-            xmins = driver.find_element(By.XPATH, f"{xpath}/td[3]").text
-            ev = driver.find_element(By.XPATH, f"{xpath}/td[4]").text
-
-            player_data = {"name": name, "price": price, "xmins": xmins, "ev": ev}
-            playlist.append(player_data)
-        players_df = pd.DataFrame(playlist)
-        new_dict = load_player_mappings()
-        players_df["name"] = players_df["name"].replace(new_dict)
-        players_df["name"] = players_df["name"].str.lower()
-        df5 = players_df["name"].dropna().astype(str).tolist()
-
-        def matching2(closest, df5):
-            input_embedding = model.encode(closest)
-            df5_embeddings = model.encode(df5)
-            similarities = util.cos_sim(input_embedding, df5_embeddings)
-            best_match_index = similarities.argmax().item()
-            best_match = df5[best_match_index]
-            if similarities.max() < 0.5:
-                for name in df5:
-                    input_parts = closest.split()
-                    name_parts = name.split()
-
-                    if input_parts and name_parts:
-                        input_first_part = input_parts[0]
-                        name_first_part = name_parts[0]
-
-                        if jellyfish.metaphone(input_first_part) == jellyfish.metaphone(
-                            name_first_part
-                        ):
-                            return name
-            return best_match
-
-        evname = matching2(closest, df5)
-        ev_df = players_df[players_df["name"] == evname]
-        player_xmins = ev_df["xmins"].iloc[0]
-        player_price = ev_df["price"].iloc[0]
-        final_price = player_price[3:8]
-        player_ev = ev_df["ev"].iloc[0]
-    else:
-        pass
+if current_stats:
+    total_time = sum(float(item["time"]) for item in current_stats)
+    total_xg_season = sum(float(item["xG"]) for item in current_stats)
+    total_xa_season = sum(float(item["xA"]) for item in current_stats)
+    total_shots_season = sum(int(item["shots"]) for item in current_stats)
+    total_npxg_season = sum(float(item["npxG"]) for item in current_stats)
 else:
-    pass
-# %%
-league_player_data = client.league(league=league).get_player_data(season=season)
-df1 = pd.DataFrame(league_player_data)
+    total_time = 0
+    total_xg_season = 0
+    total_xa_season = 0
+    total_shots_season = 0
+    total_npxg_season = 0
 
-# %%
-df2 = df1[df1["id"] == player_id]
-df2 = df2.copy()
-df2["xG"] = pd.to_numeric(df2["xG"])
-df2["time"] = pd.to_numeric(df2["time"])
-df2["shots"] = pd.to_numeric(df2["shots"])
-df2["npxG"] = pd.to_numeric(df2["npxG"])
-df2["xA"] = pd.to_numeric(df2["xA"])
-df2["xGI"] = df2["xG"] + df2["xA"]
-xg_p90 = df2["xG"].sum() / (df2["time"].sum() / 90)
-shots_p90 = df2["shots"].sum() / (df2["time"].sum() / 90)
-npxg_p90 = df2["npxG"].sum() / (df2["time"].sum() / 90)
-xgi_p90 = df2["xGI"].sum() / (df2["time"].sum() / 90)
+if total_time > 0:
+    xg_p90 = total_xg_season / (total_time / 90)
+    shots_p90 = total_shots_season / (total_time / 90)
+    npxg_p90 = total_npxg_season / (total_time / 90)
+    xgi_p90 = (total_xg_season + total_xa_season) / (total_time / 90)
+else:
+    xg_p90 = shots_p90 = npxg_p90 = xgi_p90 = 0
 
+# --- DETERMINE TEAM/LEAGUE NAMES ---
+unique_teams = list(set(item["team"] for item in current_stats))
+leagues_to_check = ["EPL", "La_liga", "Bundesliga", "Serie_A", "Ligue_1", "RFPL"]
+final_team_strings = []
+
+print("Verifying leagues for team names...")
+for team in unique_teams:
+    found_league = None
+    for lg in leagues_to_check:
+        if check_if_team_in_league(lg, season, team):
+            found_league = lg
+            break
+
+    if found_league:
+        clean_league = found_league.replace("_", " ")
+        final_team_strings.append(f"{team} ({clean_league})")
+    else:
+        final_team_strings.append(f"{team} (Unknown)")
+
+teams_title_str = " + ".join(final_team_strings)
 
 # %%
 df["X"] = pd.to_numeric(df["X"])
@@ -246,7 +216,7 @@ ax1.text(
 ax1.text(
     x=0.5,
     y=0.71,
-    s=f"Shot Map for the {league_name} {season}/{int(season[2:4]) + 1} Season",
+    s=f"Shot Map at {teams_title_str} for the {season[2:4]}/{int(season[2:4]) + 1} Season",
     fontsize=13,
     fontproperties=font_props,
     fontweight="bold",
@@ -324,7 +294,7 @@ ax1.text(
 ax1.text(
     x=0.096,
     y=0.286,
-    s=f"- Shot Saved",
+    s="- Shot Saved",
     fontsize=10,
     fontproperties=font_props,
     color="white",
@@ -343,7 +313,7 @@ ax1.scatter(
 ax1.text(
     x=0.216,
     y=0.286,
-    s=f"- Blocked/Off Target",
+    s="- Blocked/Off Target",
     fontsize=10,
     fontproperties=font_props,
     color="white",
@@ -362,7 +332,7 @@ ax1.scatter(
 ax1.text(
     x=0.396,
     y=0.286,
-    s=f"- Goal",
+    s="- Goal",
     fontsize=11,
     fontproperties=font_props,
     color="white",
@@ -381,7 +351,7 @@ ax1.scatter(
 ax1.text(
     x=0.486,
     y=0.286,
-    s=f"- Penalty Scored",
+    s="- Penalty Scored",
     fontsize=11,
     fontproperties=font_props,
     color="white",
@@ -401,7 +371,7 @@ ax1.scatter(
 ax1.text(
     x=0.646,
     y=0.286,
-    s=f"- Penalty Missed",
+    s="- Penalty Missed",
     fontsize=11,
     fontproperties=font_props,
     color="white",
@@ -421,7 +391,7 @@ ax1.scatter(
 ax1.text(
     x=0.806,
     y=0.286,
-    s=f"- Freekick Scored",
+    s="- Freekick Scored",
     fontsize=11,
     fontproperties=font_props,
     color="white",
@@ -441,7 +411,7 @@ ax1.scatter(
 ax1.text(
     x=0.83,
     y=-0.1,
-    s=f"xG per 90",
+    s="xG per 90",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -463,7 +433,7 @@ ax1.text(
 ax1.text(
     x=0.82,
     y=-0.51,
-    s=f"Shots per 90",
+    s="Shots per 90",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -485,7 +455,7 @@ ax1.text(
 ax1.text(
     x=0.82,
     y=-0.9,
-    s=f"npxG per 90",
+    s="npxG per 90",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -507,7 +477,7 @@ ax1.text(
 ax1.text(
     x=0.83,
     y=-1.3,
-    s=f"xGI per 90",
+    s="xGI per 90",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -588,7 +558,7 @@ ax3.set_facecolor(background_color)
 ax3.text(
     x=0.06,
     y=1.8,
-    s=f"Total Shots",
+    s="Total Shots",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -610,7 +580,7 @@ ax3.text(
 ax3.text(
     x=0.25,
     y=1.8,
-    s=f"Total Goals",
+    s="Total Goals",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -632,7 +602,7 @@ ax3.text(
 ax3.text(
     x=0.44,
     y=1.8,
-    s=f"Total xG",
+    s="Total xG",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -654,7 +624,7 @@ ax3.text(
 ax3.text(
     x=0.6,
     y=1.8,
-    s=f"xG per Shot",
+    s="xG per Shot",
     fontsize=20,
     fontproperties=font_props,
     fontweight="bold",
@@ -673,37 +643,10 @@ ax3.text(
     ha="left",
 )
 
-if league == "EPL" and season == "2024":
-    if review_data.lower() == "y":
-        ax3.text(
-            x=0.84,
-            y=2.7,
-            s=f"  Projections \n  this GW:",
-            fontsize=18,
-            fontproperties=font_props,
-            fontweight="bold",
-            color="white",
-            ha="left",
-        )
-        ax3.text(
-            x=0.85,
-            y=1.2,
-            s=f" xMins: {player_xmins} \n Price: {final_price} \n EV: {player_ev}",
-            fontsize=18,
-            fontproperties=font_props,
-            fontweight="bold",
-            color="white",
-            ha="left",
-        )
-    else:
-        pass
-else:
-    pass
-
 ax3.text(
     x=0.21,
     y=0.05,
-    s=f"Viz by @BetterThanMario | Github: github.com/AnayShukla | Data: understat.com | EV Data: fplreview.com",
+    s="Viz by @BetterThanMario | Github: github.com/AnayShukla | Data: understat.com | EV Data: fplreview.com",
     fontsize=10,
     color="white",
     alpha=0.7,

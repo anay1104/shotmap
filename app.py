@@ -1,25 +1,14 @@
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-from mplsoccer import VerticalPitch
+import matplotlib.pyplot as plt  # type: ignore
+import matplotlib.font_manager as fm  # type: ignore
+from mplsoccer import VerticalPitch  # type: ignore
 import json
 import pandas as pd
-import understatapi
-import numpy as np
-import os
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.support.ui import Select
-from selenium.webdriver.chrome.options import Options
 import time
-from sentence_transformers import SentenceTransformer, util
-import jellyfish
-from webdriver_manager.chrome import ChromeDriverManager
-import torch
+import requests
 from io import BytesIO
-import streamlit as st
+import streamlit as st  # type: ignore
 
-st.set_page_config(page_title="Shotmapgen", page_icon=":soccer:")
+st.set_page_config(page_title="Shotmap Generator", page_icon=":soccer:")
 
 
 @st.cache_data
@@ -30,20 +19,54 @@ def load_data():
     return df
 
 
+@st.cache_data
+def get_player_understat_data(player_id):
+    base_url = "https://understat.com"
+    player_url = f"{base_url}/getPlayerData/{player_id}"
+
+    try:
+        with requests.Session() as session:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}
+            )
+            r = session.get(player_url)
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        return None
+    return None
+
+
+@st.cache_data
+def check_if_team_in_league(league_name, season, team_name):
+    url = f"https://understat.com/getLeagueData/{league_name}/{season}"
+    try:
+        with requests.Session() as session:
+            session.headers.update(
+                {"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest"}
+            )
+            r = session.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                main_data = data.get("dates", data.get("date", []))
+                for match in main_data:
+                    home_team = match.get("h", {}).get("title")
+                    away_team = match.get("a", {}).get("title")
+                    if home_team == team_name or away_team == team_name:
+                        return True
+    except Exception:
+        return False
+    return False
+
+
 players_data = load_data()
 player_names = sorted(players_data["name"].unique().tolist())
 
-available_seasons = [str(year) for year in range(2024, 2012, -1)]
-
-torch.classes.__path__ = []
 
 if "visitor_count" not in st.session_state:
     st.session_state.visitor_count = 0
 
 st.session_state.visitor_count += 1
-
-if st.session_state.visitor_count > 10:
-    st.warning("High traffic detected. Generation might take longer.")
 
 if "generate_plot" not in st.session_state:
     st.session_state.generate_plot = False
@@ -52,7 +75,7 @@ if "results_cache" not in st.session_state:
 
 st.title("Shot Map Generator")
 st.markdown(
-    "Created by Anay Shukla | Twitter: [@BetterThanMario](https://twitter.com/BetterThanMario) | Bluesky: [@luigi1104.bsky.social](https://bsky.app/profile/luigi1104.bsky.social) | Email: anayshukla11@gmail.com"
+    "Created by Anay Shukla | Twitter: [@BetterThanMario](https://twitter.com/BetterThanMario) | Bluesky: [@luigi1104.bsky.social](https://bsky.app/profile/luigi1104.bsky.social)"
 )
 
 st.header("About")
@@ -63,7 +86,7 @@ st.write(
 tab1, tab2, tab3 = st.tabs(["Main", "Output", "FAQ"])
 
 with tab1:
-    with st.container(height=320, border=True):
+    with st.container(height=190, border=True, width=2500):
         input1 = st.selectbox(
             "Select player",
             options=player_names,
@@ -71,18 +94,43 @@ with tab1:
             placeholder="Type to search or select a player...",
         )
 
-        season = st.selectbox("Select season", options=available_seasons, index=0)
+        player_json_data = None
+        player_id = None
+        available_seasons = []
 
-        review_data = st.toggle(
-            "Show FPL EV projection for the upcoming gameweek (Only for players currently playing in the Premier League)",
-            value=False,
+        if input1:
+            # 1. Find Player ID
+            closest = input1
+            new_df = players_data[players_data["name"] == closest]
+
+            if new_df.empty:
+                st.error(f"Error: Could not find data for {input1}.")
+                st.stop()
+
+            if "id" in new_df.columns:
+                player_id = str(new_df.iloc[0]["id"])
+            else:
+                player_id = str(new_df.iloc[0, 0])
+
+            player_json_data = get_player_understat_data(player_id)
+
+            if (
+                player_json_data
+                and "groups" in player_json_data
+                and "season" in player_json_data["groups"]
+            ):
+                season_list = player_json_data["groups"]["season"]
+                unique_seasons = set(item["season"] for item in season_list)
+                available_seasons = sorted(list(unique_seasons), reverse=True)
+
+        season = st.selectbox(
+            "Select season",
+            options=available_seasons,
+            placeholder="Select a season... (Each season corresponds to the starting year, e.g., 2023 for 2023/24)",
+            disabled=not available_seasons,
         )
 
-        button = st.button("Generate Shot Map")
-
-    st.info(
-        "**Note:** Reminder that this is still a work in progress, will be making fixes with a few issues and also try to introduce new updates as well. Works perfectly for all players for the current season, however for players who played in a different league in any of the previous seasons will not yield accurate outputs, for instance, Kylian Mbappe's shot map for the 2023/24 season will be accurate, however, the other statistics will be inaccurate (as he was playing in Ligue 1 during that season). Hoping to fix it soon, sorry for the inconvience caused!"
-    )
+    button = st.button("Generate Shot Map")
 
     if "fig" not in st.session_state:
         st.session_state.fig = None
@@ -95,11 +143,6 @@ with tab1:
             st.info("Retrieved from cache. Click on the Output tab to see the plot.")
         else:
             current_time = time.time()
-            if (
-                "last_request_time" in st.session_state
-                and current_time - st.session_state.last_request_time < 30
-            ):
-                st.warning("Please wait 30 seconds between generating shot maps.")
 
             st.session_state.last_request_time = current_time
 
@@ -107,156 +150,107 @@ with tab1:
                 st.error("Please enter a valid year.", icon=":material/error:")
             else:
                 with st.spinner(
-                    "Generating shot map, this will take a few minutes (feel free to browse through the FAQ section!)...",
+                    "Generating shot map, should take less than 10 seconds (feel free to browse through the FAQ section!)...",
                     show_time=True,
                 ):
                     try:
+                        if not player_json_data:
+                            st.error("Could not retrieve data from Understat.")
+                            st.stop()
 
-                        def load_player_mappings():
-                            with open(
-                                "player_mappings.json", "r", encoding="utf-8"
-                            ) as f:
-                                return json.load(f)
+                        shots_data = player_json_data["shots"]
+                        df = pd.DataFrame(shots_data)
+                        df = df[df["season"] == season]
 
-                        closest = input1
-                        new_df = players_data[players_data["name"] == closest]
+                        if df.empty:
+                            st.error(f"No shots found for {input1} in {season}")
+                            st.stop()
 
-                        # (The logic for player_id and league remains the same)
-                        player_id = new_df.iloc[0, 0]
-                        player_id = str(player_id)
-                        league = new_df.iloc[0, 3]
-                        league_name = new_df.iloc[0, 2]
+                        df["X"] = pd.to_numeric(df["X"])
+                        df["Y"] = pd.to_numeric(df["Y"])
+                        df["xG"] = pd.to_numeric(df["xG"])
 
-                        client = understatapi.UnderstatClient()
+                        player_name = input1
 
-                        shots_player = client.player(player=player_id).get_shot_data()
+                        season_groups = player_json_data.get("groups", {}).get(
+                            "season", []
+                        )
 
-                        df_all_seasons = pd.DataFrame(shots_player)
-                        available_seasons = df_all_seasons["season"].unique()
+                        current_season_entries = [
+                            item
+                            for item in season_groups
+                            if str(item["season"]) == str(season)
+                        ]
 
-                        if season not in available_seasons:
-                            seasons_list = ", ".join(sorted(available_seasons))
-                            st.error(
-                                f"No data found for {closest} in the {season}/{int(season) + 1} season. "
-                                + f"Available seasons for this player: {seasons_list}",
-                                icon="❌",
+                        unique_teams = list(
+                            set(item["team"] for item in current_season_entries)
+                        )
+
+                        leagues_to_check = [
+                            "EPL",
+                            "La_liga",
+                            "Bundesliga",
+                            "Serie_A",
+                            "Ligue_1",
+                            "RFPL",
+                        ]
+                        final_team_strings = []
+
+                        progress_text = st.empty()
+                        progress_text.text("Verifying leagues...")
+
+                        for team in unique_teams:
+                            found_league = None
+                            for league in leagues_to_check:
+                                if check_if_team_in_league(league, season, team):
+                                    found_league = league
+                                    break
+
+                            if found_league:
+                                clean_league = found_league.replace("_", " ")
+                                final_team_strings.append(f"{team} ({clean_league})")
+                            else:
+                                final_team_strings.append(f"{team} (Unknown)")
+
+                        progress_text.empty()
+                        teams_title_str = " + ".join(final_team_strings)
+
+                        current_stats = [
+                            item
+                            for item in season_groups
+                            if str(item["season"]) == str(season)
+                        ]
+
+                        if current_stats:
+                            total_time = sum(
+                                float(item["time"]) for item in current_stats
                             )
-                            raise ValueError(f"No data for season {season}")
-
-                        df = df_all_seasons[df_all_seasons["season"] == season]
-                        player_name = df.iloc[1, 6]
-
-                        if season == "2024" and league == "EPL" and review_data:
-                            model = SentenceTransformer("models/all-MiniLM-L6-v2")
-                            chrome_options = Options()
-                            chrome_options.add_argument("--headless")
-                            chrome_options.add_argument("--disable-gpu")
-                            chrome_options.add_argument("--disable-logging")
-                            chrome_options.add_argument("--silent")
-                            chrome_options.add_argument("--disable-dev-shm-usage")
-                            chrome_options.add_argument("--no-sandbox")
-                            chrome_options.add_argument("--disable-extensions")
-
-                            driver = webdriver.Chrome(
-                                ChromeDriverManager().install(), options=chrome_options
+                            total_xg_season = sum(
+                                float(item["xG"]) for item in current_stats
                             )
-
-                            url1 = "https://www.fplreview.com/free-planner/"
-                            driver.get(url1)
-
-                            time.sleep(15)
-
-                            dropdown = Select(driver.find_element(By.ID, "myGroup"))
-                            dropdown.select_by_visible_text("All Players")
-
-                            checkbox = driver.find_element(By.ID, "checker")
-                            if not checkbox.is_selected():
-                                checkbox.click()
-
-                            rows = driver.find_elements(By.CLASS_NAME, "playerRow")
-
-                            num_rows = len(rows)
-
-                            playlist = []
-
-                            for row_num in range(1, num_rows - 1):
-                                xpath = f'//*[@id="lightweight"]/tr[{row_num}]'
-                                name = driver.find_element(
-                                    By.XPATH, f'{xpath}/td[2]//div[@class="playerName"]'
-                                ).text
-                                price = driver.find_element(
-                                    By.XPATH,
-                                    f'{xpath}/td[2]//div[@class="playerDetails"]',
-                                ).text
-                                xmins = driver.find_element(
-                                    By.XPATH, f"{xpath}/td[3]"
-                                ).text
-                                ev = driver.find_element(
-                                    By.XPATH, f"{xpath}/td[4]"
-                                ).text
-
-                                player_data = {
-                                    "name": name,
-                                    "price": price,
-                                    "xmins": xmins,
-                                    "ev": ev,
-                                }
-                                playlist.append(player_data)
-                            players_df = pd.DataFrame(playlist)
-                            new_dict = load_player_mappings()
-                            players_df["name"] = players_df["name"].replace(new_dict)
-                            players_df["name"] = players_df["name"].str.lower()
-                            df5 = players_df["name"].dropna().astype(str).tolist()
-
-                            def matching2(closest, df5):
-                                input_embedding = model.encode(closest)
-                                df5_embeddings = model.encode(df5)
-                                similarities = util.cos_sim(
-                                    input_embedding, df5_embeddings
-                                )
-                                best_match_index = similarities.argmax().item()
-                                best_match = df5[best_match_index]
-                                if similarities.max() < 0.5:
-                                    for name in df5:
-                                        input_parts = closest.split()
-                                        name_parts = name.split()
-
-                                        if input_parts and name_parts:
-                                            input_first_part = input_parts[0]
-                                            name_first_part = name_parts[0]
-
-                                            if jellyfish.metaphone(
-                                                input_first_part
-                                            ) == jellyfish.metaphone(name_first_part):
-                                                return name
-                                return best_match
-
-                            evname = matching2(closest, df5)
-                            ev_df = players_df[players_df["name"] == evname]
-                            player_xmins = ev_df["xmins"].iloc[0]
-                            player_price = ev_df["price"].iloc[0]
-                            final_price = player_price[3:8]
-                            player_ev = ev_df["ev"].iloc[0]
+                            total_xa_season = sum(
+                                float(item["xA"]) for item in current_stats
+                            )
+                            total_shots_season = sum(
+                                int(item["shots"]) for item in current_stats
+                            )
+                            total_npxg_season = sum(
+                                float(item["npxG"]) for item in current_stats
+                            )
                         else:
-                            pass
+                            total_time = 0
+                            total_xg_season = 0
+                            total_xa_season = 0
+                            total_shots_season = 0
+                            total_npxg_season = 0
 
-                        league_player_data = client.league(
-                            league=league
-                        ).get_player_data(season=season)
-                        df1 = pd.DataFrame(league_player_data)
-
-                        df2 = df1[df1["id"] == player_id]
-                        df2 = df2.copy()
-                        df2["xG"] = pd.to_numeric(df2["xG"])
-                        df2["time"] = pd.to_numeric(df2["time"])
-                        df2["shots"] = pd.to_numeric(df2["shots"])
-                        df2["npxG"] = pd.to_numeric(df2["npxG"])
-                        df2["xA"] = pd.to_numeric(df2["xA"])
-                        df2["xGI"] = df2["xG"] + df2["xA"]
-                        xg_p90 = df2["xG"].sum() / (df2["time"].sum() / 90)
-                        shots_p90 = df2["shots"].sum() / (df2["time"].sum() / 90)
-                        npxg_p90 = df2["npxG"].sum() / (df2["time"].sum() / 90)
-                        xgi_p90 = df2["xGI"].sum() / (df2["time"].sum() / 90)
+                        if total_time > 0:
+                            xg_p90 = total_xg_season / (total_time / 90)
+                            shots_p90 = total_shots_season / (total_time / 90)
+                            npxg_p90 = total_npxg_season / (total_time / 90)
+                            xgi_p90 = (total_xg_season + total_xa_season) / (
+                                total_time / 90
+                            )
 
                         df["X"] = pd.to_numeric(df["X"])
                         df["Y"] = pd.to_numeric(df["Y"])
@@ -299,10 +293,13 @@ with tab1:
                             ha="center",
                         )
 
+                        season_short = season[2:4]
+                        next_season_short = int(season_short) + 1
+
                         ax1.text(
                             x=0.5,
                             y=0.71,
-                            s=f"Shot Map for the {league_name} {season}/{int(season[2:4]) + 1} Season",
+                            s=f"Shot Map at {teams_title_str} for the {season_short}/{next_season_short} Season",
                             fontsize=13,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -380,7 +377,7 @@ with tab1:
                         ax1.text(
                             x=0.096,
                             y=0.286,
-                            s=f"- Shot Saved",
+                            s="- Shot Saved",
                             fontsize=10,
                             fontproperties=font_props,
                             color="white",
@@ -399,7 +396,7 @@ with tab1:
                         ax1.text(
                             x=0.216,
                             y=0.286,
-                            s=f"- Blocked/Off Target",
+                            s="- Blocked/Off Target",
                             fontsize=10,
                             fontproperties=font_props,
                             color="white",
@@ -418,7 +415,7 @@ with tab1:
                         ax1.text(
                             x=0.396,
                             y=0.286,
-                            s=f"- Goal",
+                            s="- Goal",
                             fontsize=11,
                             fontproperties=font_props,
                             color="white",
@@ -437,7 +434,7 @@ with tab1:
                         ax1.text(
                             x=0.486,
                             y=0.286,
-                            s=f"- Penalty Scored",
+                            s="- Penalty Scored",
                             fontsize=11,
                             fontproperties=font_props,
                             color="white",
@@ -457,7 +454,7 @@ with tab1:
                         ax1.text(
                             x=0.646,
                             y=0.286,
-                            s=f"- Penalty Missed",
+                            s="- Penalty Missed",
                             fontsize=11,
                             fontproperties=font_props,
                             color="white",
@@ -477,7 +474,7 @@ with tab1:
                         ax1.text(
                             x=0.806,
                             y=0.286,
-                            s=f"- Freekick Scored",
+                            s="- Freekick Scored",
                             fontsize=11,
                             fontproperties=font_props,
                             color="white",
@@ -497,7 +494,7 @@ with tab1:
                         ax1.text(
                             x=0.83,
                             y=-0.1,
-                            s=f"xG per 90",
+                            s="xG per 90",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -519,7 +516,7 @@ with tab1:
                         ax1.text(
                             x=0.82,
                             y=-0.51,
-                            s=f"Shots per 90",
+                            s="Shots per 90",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -541,7 +538,7 @@ with tab1:
                         ax1.text(
                             x=0.82,
                             y=-0.9,
-                            s=f"npxG per 90",
+                            s="npxG per 90",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -563,7 +560,7 @@ with tab1:
                         ax1.text(
                             x=0.83,
                             y=-1.3,
-                            s=f"xGI per 90",
+                            s="xGI per 90",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -646,7 +643,7 @@ with tab1:
                         ax3.text(
                             x=0.06,
                             y=1.8,
-                            s=f"Total Shots",
+                            s="Total Shots",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -668,7 +665,7 @@ with tab1:
                         ax3.text(
                             x=0.25,
                             y=1.8,
-                            s=f"Total Goals",
+                            s="Total Goals",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -690,7 +687,7 @@ with tab1:
                         ax3.text(
                             x=0.44,
                             y=1.8,
-                            s=f"Total xG",
+                            s="Total xG",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -712,7 +709,7 @@ with tab1:
                         ax3.text(
                             x=0.6,
                             y=1.8,
-                            s=f"xG per Shot",
+                            s="xG per Shot",
                             fontsize=20,
                             fontproperties=font_props,
                             fontweight="bold",
@@ -731,37 +728,10 @@ with tab1:
                             ha="left",
                         )
 
-                        if league == "EPL" and season == "2024":
-                            if review_data:
-                                ax3.text(
-                                    x=0.84,
-                                    y=2.7,
-                                    s=f"  Projections \n  this GW:",
-                                    fontsize=18,
-                                    fontproperties=font_props,
-                                    fontweight="bold",
-                                    color="white",
-                                    ha="left",
-                                )
-                                ax3.text(
-                                    x=0.85,
-                                    y=1.2,
-                                    s=f" xMins: {player_xmins} \n Price: {final_price} \n EV: {player_ev}",
-                                    fontsize=18,
-                                    fontproperties=font_props,
-                                    fontweight="bold",
-                                    color="white",
-                                    ha="left",
-                                )
-                            else:
-                                pass
-                        else:
-                            pass
-
                         ax3.text(
-                            x=0.21,
+                            x=0.29,
                             y=0.05,
-                            s=f"Viz by @BetterThanMario | Github: github.com/AnayShukla | Data: understat.com",
+                            s="Viz by @BetterThanMario | Created using https://shotmap.streamlit.app | Data: understat.com",
                             fontsize=10,
                             color="white",
                             alpha=0.7,
@@ -825,11 +795,11 @@ with tab2:
 with tab3:
     what_is_a_shot_map = """A shot map is a visual representation of a player's shots taken during a match or over a season. It typically shows the location of each shot on the pitch, along with additional information such as whether the shot was on target, off target, or resulted in a goal. Shot maps are useful for analyzing a player's shooting performance and understanding their scoring opportunities, primarily (but not limited to) useful for players in the attacking roles."""
     how_is_it_useful = """Shot maps are useful for analyzing a player's ability to finish and understanding their attacking output. It essentially is a graphical representation of the quality of scoring opportunities a player avails to himself. Keen data-loving fans and even the general public can use this to assist their own work or develop a deeper understanding about a players' scoring ability."""
-    what_is_xg = """xG, or expected goals, is a metric used in football to assess the quality of scoring chances. It assigns a value to each shot based on various factors such as shot location, angle, type of chance, etc. The xG value represents the likelihood of a shot resulting in a goal, with higher values indicating better chances. xG is useful for evaluating player performance and team attacking efficiency."""
+    what_is_xg = """xG, or expected goals, is a metric used in football to assess the quality of scoring chances. It assigns a value to each shot based on various factors such as shot location, angle, type of chance, etc. The xG value represents the likelihood of a shot resulting in a goal, with higher values indicating a better goal-scoring chance. xG is useful for evaluating player performance and team attacking efficiency."""
     what_is_npxg = """npxG, or non-penalty expected goals, is a variant of the xG metric that excludes penalty kicks. It focuses solely on the quality of scoring chances from open play and set pieces, providing a clearer picture of a player's goal-scoring ability without the influence of penalties which tend to be shots with very high xG."""
-    what_is_xgi = """xGI, or expected goal involvements, is a metric that combines a player's expected goals (xG) and expected assists (xA) into a single value. It measures a player's overall attacking contribution by considering both their goal-scoring opportunities and their ability to create chances for teammates."""
-    what_is_per90 = """Per 90 refers to statistics that are normalized to a 90-minute match duration. It allows for fair comparisons between players or teams regardless of the number of minutes played. However, it is important to note that sometimes per 90 stats can be misleading if a player has played significantly fewer minutes than others, as they may not accurately reflect their overall performance."""
-    what_are_the_circles = """The circles on the shot map represent the quality of the scoring chance. The size of the circle indicates the xG value of the shot, with larger circles representing higher xG values. The color of the circle indicates the result of the shot, such as a goal (red), saved shot (yellow), blocked/off target (colourless), penalty scored (blue square), penalty missed (pink square), and freekick scored (turquoise triangle)."""
+    what_is_xgi = """xGI, or expected goal involvement, is a metric that combines a player's expected goals (xG) and expected assists (xA) into a single value. It measures a player's overall attacking contribution by considering both their goal-scoring opportunities and their creativity."""
+    what_is_per90 = """Per 90 metrics refers to statistics that are normalized to a 90-minute match duration. It allows for fair comparisons between players or teams regardless of the number of minutes played. However, it is important to note that sometimes per 90 stats can be misleading if a player has played significantly fewer minutes than others, as these may not accurately reflect their overall performance."""
+    what_are_the_circles = """The circles on the shot map represent the quality of the scoring chance. The size of the circle indicates the xG value of the shot, with larger circles representing higher xG values and vice versa. The colour of the circle indicates the result of the shot, such as a goal (red), saved shot (yellow), blocked/off target (colourless), penalty scored (blue square), penalty missed (pink square), and freekick scored (turquoise triangle)."""
 
     st.markdown("### Frequently Asked Questions (FAQ)")
     with st.expander("What is a shot map?"):
@@ -862,7 +832,7 @@ with tab3:
     - **Square**: Penalty shots taken
     - **Triangle**: Free kick shots taken
     
-    #### **Colors**
+    #### **Colours**
     - Red: Goal
     - Yellow: Saved shot
     - Blue: Penalty scored
@@ -873,7 +843,7 @@ with tab3:
     #### **Stats Explained**
     - **xG (Expected Goals)**: Probability of scoring based on shot quality
     - **npxG**: Non-penalty expected goals
-    - **xGI**: Expected goal involvements (xG + xA)
+    - **xGI**: Expected goal involvement (xG + xA)
     - **xA**: Expected assists
         """)
 
