@@ -1,6 +1,5 @@
-import scrapy
-from scrapy.spiders import CrawlSpider, Rule
-from scrapy.linkextractors import LinkExtractor
+import scrapy  # type: ignore
+from scrapy.spiders import CrawlSpider  # type: ignore
 
 
 class DetailsSpider(CrawlSpider):
@@ -8,7 +7,7 @@ class DetailsSpider(CrawlSpider):
     allowed_domains = ["understat.com"]
     base_url = "https://understat.com/player/{}"
 
-    current_id = 13284
+    current_id = 13283
 
     def start_requests(self):
         yield scrapy.Request(
@@ -29,7 +28,6 @@ class DetailsSpider(CrawlSpider):
                 yield {
                     "player_id": player_id,
                     "name": p.css("li::text").get(),
-                    "league": p.css('a[href*="league/"]::text').get(),
                 }
 
         self.current_id += 1

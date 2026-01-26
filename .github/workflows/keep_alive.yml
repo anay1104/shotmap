@@ -1,15 +1,22 @@
-name: Keep App Alive (Ping)
+name: Keep App Alive
 
 on:
   schedule:
-    - cron: '0 */8 * * *'
+    - cron: '0 */4 * * *' # Changed to every 4 hours (safer for aggressive sleep timers)
   workflow_dispatch:
 
 jobs:
-  ping-url:
+  keep-alive:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Ping App URL
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Auto-commit
         run: |
-          # Replace with your actual Streamlit App URL
-          curl -I https://shotmap.streamlit.app/
+          git config --global user.name "KeepAlive Bot"
+          git config --global user.email "bot@noreply.github.com"
+          git commit --allow-empty -m "ACTIVATE: Keep Streamlit Alive"
+          git push
