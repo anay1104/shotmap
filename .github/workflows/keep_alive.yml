@@ -2,21 +2,21 @@ name: Keep App Alive
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Changed to every 4 hours (safer for aggressive sleep timers)
-  workflow_dispatch:
+    - cron: '0 */2 * * *'
+  workflow_dispatch: 
 
 jobs:
-  keep-alive:
+  ping-repo:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write  # Critical: Grants the action permission to push to your repo
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Auto-commit
+      - name: Push Empty Commit
         run: |
-          git config --global user.name "KeepAlive Bot"
-          git config --global user.email "bot@noreply.github.com"
-          git commit --allow-empty -m "ACTIVATE: Keep Streamlit Alive"
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git commit --allow-empty -m "Auto-commit to keep app awake"
           git push
